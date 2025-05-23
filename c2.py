@@ -285,9 +285,14 @@ def build_variant_to_cmake_config_cmd(
             )
 
         if build_variant.toolchain_file is not None:
-            file.write(f'include("{os.path.abspath(build_variant.toolchain_file)}")')
+            toolchain_file = os.path.abspath(build_variant.toolchain_file)
         elif CMAKE_TOOLCHAIN_FILE is not None:
-            file.write(f'include("{CMAKE_TOOLCHAIN_FILE}")')
+            toolchain_file = CMAKE_TOOLCHAIN_FILE
+
+        if is_windows():
+            toolchain_file = toolchain_file.replace('\\', '/')
+
+        file.write(f'include("{toolchain_file}")')
 
     return config_args
 
