@@ -30,7 +30,7 @@ NO_CONFIGURE: bool | None = None
 CXXFLAGS: str | None = None
 CTESTFLAGS: str | None = None
 WINSDK_VERSION: str | None = None
-
+CMAKE_TOOLCHAIN_FILE: str | None = None
 
 @dataclasses.dataclass
 class BuildVariant:
@@ -286,6 +286,8 @@ def build_variant_to_cmake_config_cmd(
 
         if build_variant.toolchain_file is not None:
             file.write(f'include("{os.path.abspath(build_variant.toolchain_file)}")')
+        elif CMAKE_TOOLCHAIN_FILE is not None:
+            file.write(f'include("{CMAKE_TOOLCHAIN_FILE}")')
 
     return config_args
 
@@ -661,9 +663,16 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--cmake-toolchain-file",
+        type=str,
+        dest="cmake_toolchain_file",
+        help="Path to the CMake toolchain file that will be common to all builds generated."
+    )
+
+    parser.add_argument(
         "--toolchains",
         type=str,
-        help="Path to a JSON file containing an array of build variants.",
+        help="Path to a JSON file containing an array of build variants. This option will override all over the build matrix generation options specified.",
     )
 
     args = parser.parse_args()
@@ -760,6 +769,10 @@ def parse_args():
     if args.no_cmake:
         global NO_CONFIGURE
         NO_CONFIGURE = True
+
+    if args.cmake_toolchain_file:
+        global CMAKE_TOOLCHAIN_FILE
+        CMAKE_TOOLCHAIN_FILE = os.path.abspath(args.cmake_toolchain_file)
 
     if args.cxxflags:
         global CXXFLAGS
