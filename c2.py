@@ -18,12 +18,12 @@ num_cores = os.cpu_count()
 
 BUILD_ROOT = os.path.abspath("build_c2py")
 SOURCE_ROOT = os.path.abspath("")
+TARGET: str = "all"
 CMAKE_PATH: str | None = None
 NINJA_PATH: str | None = None
 COMMAND_MODE: str | None = None
 CMAKE_GENERATOR: str | None = None
 NUM_JOBS: int | None = None
-LIBRARY: str | None = None
 UBSAN: bool | None = None
 ASAN: bool | None = None
 NO_CONFIGURE: bool | None = None
@@ -41,6 +41,8 @@ class BuildVariant:
     variant: str | None = None
     cxxstd: str | None = None
     link: str | None = None
+    toolchain_file: str | None = None
+    project_name: str | None = None
 
 
 def is_windows():
@@ -51,7 +53,11 @@ def is_windows():
 def build_variant_to_build_dir_fragment(build_variant: BuildVariant):
     """A detail function intended to build the tree fragment"""
 
-    build_dir = f"boost_{LIBRARY}"
+    if build_variant.project_name is None:
+        build_dir = os.path.basename(SOURCE_ROOT)
+    else:
+        build_dir = os.path.basename(build_variant.project_name)
+
     if build_variant.toolset is not None:
         build_dir += f"_{build_variant.toolset}"
 
@@ -119,12 +125,11 @@ def build_variant_to_cmake_config_cmd(
         config_args = [
             CMAKE_PATH,
             "-S",
-            ".",
+            SOURCE_ROOT,
             "-B",
             build_dir,
             "-G",
             "Ninja",
-            f"-DBOOST_INCLUDE_LIBRARIES={LIBRARY}",
             f"-DCMAKE_MAKE_PROGRAM={NINJA_PATH}",
             f"-DCMAKE_NINJA_OUTPUT_PATH_PREFIX={fragment}",
             "-DCMAKE_SUPPRESS_REGENERATION=ON",
@@ -279,6 +284,9 @@ def build_variant_to_cmake_config_cmd(
                 ]
             )
 
+        if build_variant.toolchain_file is not None:
+            file.write(f'include("{os.path.abspath(build_variant.toolchain_file)}")')
+
     return config_args
 
 
@@ -430,8 +438,8 @@ def generate_msvc_toolset(arch, msvc_toolset, toolsets):
         print("completed building toolset database file")
 
 
-def configure_boost(build_variants: list[BuildVariant]):
-    """Configures the specified Boost libraries in parallel"""
+def configure_project(build_variants: list[BuildVariant]):
+    """Configures the specified library in parallel"""
 
     if NO_CONFIGURE:
         print("skipping CMake configuration step")
@@ -524,8 +532,8 @@ def configure_boost(build_variants: list[BuildVariant]):
             txt = file.read()
 
         updated_txt = txt.replace(
-            "cmake_object_order_depends_target_boost",
-            f"cmake_object_order_depends_target_boost_{fragment}",
+            "cmake_object_order_depends_target_",
+            f"cmake_object_order_depends_target_{fragment}",
         )
 
         with open(ninja_file, mode="w", encoding="utf-8") as file:
@@ -574,6 +582,12 @@ def parse_args():
         type=int,
         dest="jobs",
         help="Number of jobs used to build with CMake.",
+    )
+
+    parser.add_argument(
+        "--target",
+        type=str,
+        help="Name of the CMake target to be used in the `cmake --build <build_dir> --target <target>` call.",
     )
 
     parser.add_argument(
@@ -755,6 +769,10 @@ def parse_args():
         global CTESTFLAGS
         CTESTFLAGS = args.ctestflags
 
+    if args.target:
+        global TARGET
+        TARGET = args.target
+
     if args.toolchains:
         with open(os.path.abspath(args.toolchains), mode="r", encoding="utf-8") as file:
             build_dicts = json.load(file)
@@ -773,11 +791,13 @@ def parse_args():
     build_variants = []
     for build_dict in build_dicts:
         build_variant = BuildVariant(
-            cxxstd=build_dict["cxxstd"],
-            toolset=build_dict["toolset"],
-            variant=build_dict["variant"],
-            address_model=build_dict["address_model"],
-            link=build_dict["link"],
+            cxxstd=build_dict.get("cxxstd"),
+            toolset=build_dict.get("toolset"),
+            variant=build_dict.get("variant"),
+            address_model=build_dict.get("address_model"),
+            link=build_dict.get("link"),
+            toolchain_file=build_dict.get("toolchain_file"),
+            project_name=build_dict.get("project_name"),
         )
 
         build_variants.append(build_variant)
@@ -799,7 +819,7 @@ def build_with_driver_ninja_file(build_variants):
             file.write(f"subninja {build_dir}/build.ninja\n")
         file.write("\n")
 
-        ts = [os.path.join(path, "tests") for path in builds_dir_fragments]
+        ts = [os.path.join(path, TARGET) for path in builds_dir_fragments]
         file.write(f"build all: phony {' '.join(ts)}\n")
 
         cs = [os.path.join(path, "clean") for path in builds_dir_fragments]
@@ -884,7 +904,7 @@ def setup_ninja():
 
 
 def init():
-    """Main entry for bulk-building Boost via CMake"""
+    """Main entry for bulk-building via CMake"""
 
     print("starting c2.py script")
 
@@ -892,8 +912,10 @@ def init():
     setup_cmake()
     setup_ninja()
 
+    pprint.pp(build_variants)
+
     os.makedirs(BUILD_ROOT, exist_ok=True)
-    configure_boost(build_variants)
+    configure_project(build_variants)
     build_with_driver_ninja_file(build_variants)
     build_ctest_testfile(build_variants)
 
