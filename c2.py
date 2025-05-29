@@ -270,9 +270,10 @@ def build_variant_to_cmake_config_cmd(
                 cxxflags.append("-fsanitize=undefined")
 
         if len(cxxflags) > 0 or CXXFLAGS is not None:
-            init_flags = " ".join(cxxflags)
             if CXXFLAGS is not None:
-                init_flags += CXXFLAGS
+                cxxflags.append(CXXFLAGS)
+
+            init_flags = " ".join(cxxflags)
 
             if is_windows():
                 init_flags = init_flags.replace("\\", "\\\\").replace('"', '\\"')
@@ -930,7 +931,7 @@ def init():
     setup_cmake()
     setup_ninja()
 
-    pprint.pp(build_variants)
+    # pprint.pp(build_variants)
 
     os.makedirs(BUILD_ROOT, exist_ok=True)
     configure_project(build_variants)
