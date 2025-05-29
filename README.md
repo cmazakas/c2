@@ -10,8 +10,8 @@
 - [c2.py](#c2py)
   - [Requirements](#requirements)
   - [Introduction](#introduction)
-    - [Usage](#usage)
-    - [Windows Support](#windows-support)
+  - [Usage](#usage)
+  - [Windows Support](#windows-support)
 
 ## Introduction
 
@@ -81,7 +81,7 @@ More control over build variants in the produced matrix can be hand-specified us
 
 This will cause c2.py to generate only two builds. `project_name` is used to specify a prefix to use when creating a mangled build directory name.
 
-### Usage
+## Usage
 
 ```
 usage: c2.py [-h] [--source-dir SOURCE_DIR] [--cmake-path CMAKE_PATH] [--ninja-path NINJA_PATH] [-j JOBS] [--target TARGET] [--cxxstd CXXSTD] [--toolset TOOLSET] [--variant VARIANT]
@@ -124,7 +124,7 @@ options:
                         Path to a JSON file containing an array of build variants. This option will override all over the build matrix generation options specified.
 ```
 
-### Windows Support
+## Windows Support
 
 To specify a toolchain on Windows, the format is just `msvc-14.<N>` where `N` is one of the subversions that will be passed to vcvarsall.bat
 when the script probes for toolchains.
