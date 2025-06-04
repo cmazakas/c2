@@ -378,7 +378,8 @@ def generate_msvc_toolset(arch, msvc_toolset, toolsets):
     else:
         vcvars_ver = msvc_toolset
 
-    get_vcvars_cmd = ["get_vcvars.bat", f"-out={filename}", arch]
+    get_vcvars_cmd_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "get_vcvars.bat")
+    get_vcvars_cmd = [get_vcvars_cmd_path, f"-out={filename}", arch]
     if WINSDK_VERSION is not None:
         get_vcvars_cmd.append(WINSDK_VERSION)
 
