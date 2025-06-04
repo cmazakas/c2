@@ -260,6 +260,7 @@ def build_variant_to_cmake_config_cmd(
 
                 if build_variant.toolset == "clang":
                     cxxflags.append("-fsanitize=undefined")
+                    cxxflags.append("-fno-sanitize-recover=undefined")
                 elif build_variant.toolset.startswith("msvc-"):
                     raise ValueError(
                         "cl.exe does not support ubsan, only asan is supported"
@@ -268,6 +269,7 @@ def build_variant_to_cmake_config_cmd(
                     raise NotImplementedError()
             else:
                 cxxflags.append("-fsanitize=undefined")
+                cxxflags.append("-fno-sanitize-recover=undefined")
 
         if len(cxxflags) > 0 or CXXFLAGS is not None:
             if CXXFLAGS is not None:
