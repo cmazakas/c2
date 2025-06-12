@@ -13,6 +13,7 @@ import sys
 import pprint
 import itertools
 import json
+import shlex
 
 num_cores = os.cpu_count()
 
@@ -22,15 +23,11 @@ TARGET: str = "all"
 CMAKE_PATH: str | None = None
 NINJA_PATH: str | None = None
 COMMAND_MODE: str | None = None
-CMAKE_GENERATOR: str | None = None
 NUM_JOBS: int | None = None
-UBSAN: bool | None = None
-ASAN: bool | None = None
 NO_CONFIGURE: bool | None = None
-CXXFLAGS: str | None = None
 CTESTFLAGS: str | None = None
 WINSDK_VERSION: str | None = None
-CMAKE_TOOLCHAIN_FILE: str | None = None
+
 
 @dataclasses.dataclass
 class BuildVariant:
@@ -41,8 +38,11 @@ class BuildVariant:
     variant: str | None = None
     cxxstd: str | None = None
     link: str | None = None
-    toolchain_file: str | None = None
+    cmake_toolchain_file: str | None = None
     project_name: str | None = None
+    asan: bool | None = None
+    ubsan: bool | None = None
+    cxxflags: str | None = None
 
 
 def is_windows():
@@ -76,6 +76,12 @@ def build_variant_to_build_dir_fragment(build_variant: BuildVariant):
     if build_variant.link is not None:
         if build_variant.link == "shared":
             build_dir += f"_{build_variant.link}"
+
+    if build_variant.ubsan:
+        build_dir += "_ubsan"
+
+    if build_variant.asan:
+        build_dir += "_asan"
 
     return build_dir
 
@@ -119,9 +125,9 @@ def build_variant_to_cmake_config_cmd(
     fragment = build_variant_to_build_dir_fragment(build_variant)
 
     os.makedirs(build_dir, exist_ok=True)
-    toolchain_file = os.path.join(build_dir, "toolchain.cmake")
+    c2_toolchain_file = os.path.join(build_dir, "toolchain.cmake")
 
-    with open(toolchain_file, "w", encoding="utf-8") as file:
+    with open(c2_toolchain_file, "w", encoding="utf-8") as file:
         config_args = [
             CMAKE_PATH,
             "-S",
@@ -134,7 +140,7 @@ def build_variant_to_cmake_config_cmd(
             f"-DCMAKE_NINJA_OUTPUT_PATH_PREFIX={fragment}",
             "-DCMAKE_SUPPRESS_REGENERATION=ON",
             f"-DC2_BUILD_ROOT={BUILD_ROOT}",
-            f"-DCMAKE_TOOLCHAIN_FILE={toolchain_file}",
+            f"-DCMAKE_TOOLCHAIN_FILE={c2_toolchain_file}",
         ]
 
         file.writelines(
@@ -224,22 +230,20 @@ def build_variant_to_cmake_config_cmd(
         else:
             file.write("set(BUILD_SHARED_LIBS OFF)\n")
 
+        cxxflags = []
         if is_windows():
             assert toolchain is not None
-            cxxflags = []
-            if (
-                build_variant.toolset.startswith("msvc-")
-                or build_variant.toolset == "clang-win"
-            ):
+
+            is_msvc = build_variant.toolset.startswith("msvc-")
+            is_clang_cl = build_variant.toolset == "clang-win"
+            if is_msvc or is_clang_cl:
                 cxxflags.append("/bigobj")
-        else:
-            cxxflags = []
 
         if build_variant.address_model == "32":
             if not is_windows():
                 cxxflags.append("-m32")
 
-        if ASAN:
+        if build_variant.asan:
             if is_windows():
                 if build_variant.toolset == "clang":
                     # TODO: see if we can someday remove this
@@ -253,9 +257,9 @@ def build_variant_to_cmake_config_cmd(
             else:
                 cxxflags.append("-fsanitize=address")
 
-        if UBSAN:
+        if build_variant.ubsan:
             if is_windows():
-                if not ASAN:
+                if not build_variant.asan:
                     file.write('set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")\n')
 
                 if build_variant.toolset == "clang":
@@ -271,31 +275,29 @@ def build_variant_to_cmake_config_cmd(
                 cxxflags.append("-fsanitize=undefined")
                 cxxflags.append("-fno-sanitize-recover=undefined")
 
-        if len(cxxflags) > 0 or CXXFLAGS is not None:
-            if CXXFLAGS is not None:
-                cxxflags.append(CXXFLAGS)
+        if len(cxxflags) > 0 or build_variant.cxxflags is not None:
+            if build_variant.cxxflags is not None:
+                cxxflags.append(build_variant.cxxflags)
 
-            init_flags = " ".join(cxxflags)
+            cxx_init_flags = " ".join(cxxflags)
 
             if is_windows():
-                init_flags = init_flags.replace("\\", "\\\\").replace('"', '\\"')
+                cxx_init_flags = cxx_init_flags.replace("\\", "\\\\").replace(
+                    '"', '\\"'
+                )
 
             file.writelines(
                 [
-                    f'set(CMAKE_CXX_FLAGS_INIT "{init_flags}")\n',
-                    f'set(CMAKE_C_FLAGS_INIT "{init_flags}")\n',
+                    f'set(CMAKE_CXX_FLAGS_INIT "{cxx_init_flags}")\n',
+                    f'set(CMAKE_C_FLAGS_INIT "{cxx_init_flags}")\n',
                 ]
             )
 
-        if build_variant.toolchain_file is not None:
-            toolchain_file = os.path.abspath(build_variant.toolchain_file)
-        elif CMAKE_TOOLCHAIN_FILE is not None:
-            toolchain_file = CMAKE_TOOLCHAIN_FILE
-
-        if is_windows():
-            toolchain_file = toolchain_file.replace('\\', '/')
-
-        file.write(f'include("{toolchain_file}")')
+        if build_variant.cmake_toolchain_file is not None:
+            toolchain_file = os.path.abspath(build_variant.cmake_toolchain_file)
+            if is_windows():
+                toolchain_file = toolchain_file.replace("\\", "/")
+            file.write(f'include("{toolchain_file}")')
 
     return config_args
 
@@ -378,7 +380,9 @@ def generate_msvc_toolset(arch, msvc_toolset, toolsets):
     else:
         vcvars_ver = msvc_toolset
 
-    get_vcvars_cmd_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "get_vcvars.bat")
+    get_vcvars_cmd_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "get_vcvars.bat"
+    )
     get_vcvars_cmd = [get_vcvars_cmd_path, f"-out={filename}", arch]
     if WINSDK_VERSION is not None:
         get_vcvars_cmd.append(WINSDK_VERSION)
@@ -458,18 +462,17 @@ def configure_project(build_variants: list[BuildVariant]):
 
     toolsets = {}
     if is_windows():
-        msvc_toolsets = list(
-            set(
-                [
-                    build_variant.toolset.replace("msvc-", "")
-                    for build_variant in build_variants
-                ]
-            )
-        )
+        msvc_toolsets = []
+        for build_variant in build_variants:
+            assert build_variant.toolset is not None
+            msvc_toolsets.append(build_variant.toolset.replace("msvc-", ""))
+
+        msvc_toolsets = list(set(msvc_toolsets))
 
         has_32_bit = any(
             build_variant.address_model == "32" for build_variant in build_variants
         )
+
         has_64_bit = any(
             build_variant.address_model == "64" or build_variant.address_model is None
             for build_variant in build_variants
@@ -675,7 +678,7 @@ def parse_args():
         "--cmake-toolchain-file",
         type=str,
         dest="cmake_toolchain_file",
-        help="Path to the CMake toolchain file that will be common to all builds generated."
+        help="Path to the CMake toolchain file that will be common to all builds generated.",
     )
 
     parser.add_argument(
@@ -767,25 +770,25 @@ def parse_args():
     else:
         links.append(None)
 
+    asan = None
     if args.asan:
-        global ASAN
-        ASAN = True
+        asan = [True]
 
+    ubsan = None
     if args.ubsan:
-        global UBSAN
-        UBSAN = True
+        ubsan = [True]
 
     if args.no_cmake:
         global NO_CONFIGURE
         NO_CONFIGURE = True
 
+    cmake_toolchain_file = None
     if args.cmake_toolchain_file:
-        global CMAKE_TOOLCHAIN_FILE
-        CMAKE_TOOLCHAIN_FILE = os.path.abspath(args.cmake_toolchain_file)
+        cmake_toolchain_file = [os.path.abspath(args.cmake_toolchain_file)]
 
+    cxxflags = None
     if args.cxxflags:
-        global CXXFLAGS
-        CXXFLAGS = args.cxxflags
+        cxxflags = [args.cxxflags]
 
     if args.ctestflags:
         global CTESTFLAGS
@@ -805,6 +808,10 @@ def parse_args():
             "variant": variants,
             "address_model": address_models,
             "link": links,
+            "asan": asan,
+            "ubsan": ubsan,
+            "cmake_toolchain_file": cmake_toolchain_file,
+            "cxxflags": cxxflags,
         }
 
         config_perms = list(itertools.product(*configs.values()))
@@ -818,8 +825,11 @@ def parse_args():
             variant=build_dict.get("variant"),
             address_model=build_dict.get("address_model"),
             link=build_dict.get("link"),
-            toolchain_file=build_dict.get("toolchain_file"),
             project_name=build_dict.get("project_name"),
+            asan=build_dict.get("asan"),
+            ubsan=build_dict.get("ubsan"),
+            cmake_toolchain_file=build_dict.get("cmake_toolchain_file"),
+            cxxflags=build_dict.get("cxxflags"),
         )
 
         build_variants.append(build_variant)
@@ -892,6 +902,12 @@ def run_tests():
         "--schedule-random",
     ]
 
+    if CTESTFLAGS is not None:
+        ctest_cmd.append(CTESTFLAGS)
+        ctest_cmd = ' '.join(ctest_cmd)
+        ctest_cmd = shlex.split(ctest_cmd)
+
+    print(f"this is the ctest command: {ctest_cmd}")
     subprocess.run(ctest_cmd, cwd=BUILD_ROOT, check=True)
 
 
